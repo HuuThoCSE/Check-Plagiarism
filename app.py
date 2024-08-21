@@ -19,6 +19,7 @@ import nltk
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import io
+import socket
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
@@ -163,49 +164,52 @@ def is_valid_search_query(query):
         return False
     return True
 
+# Hàm kiểm tra kết nối mạng
+def is_connected():
+    try:
+        # Thử kết nối đến một trang web có kết nối nhanh (như Google)
+        socket.create_connection(("www.google.com", 80))
+        return True
+    except OSError:
+        return False
+
 # Cập nhật hàm search_google_async để trả về cả nguồn và nội dung
 async def search_google_async(query):
     if not is_valid_search_query(query):
         logging.warning("Query không hợp lệ, bỏ qua tìm kiếm trên Google.")
-        return "", ""
+        return ""
 
     try:
         logging.info(f"Tìm kiếm trên Google: {query}")
-        search_results = search(query, num_results=5)
+        search_results = search(query, num_results=3)
         content = ""
-        sources = []
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             tasks = []
             for result in search_results:
-                tasks.append(fetch_content(session, result))
-                sources.append(result)
+                # Nếu search_results trả về quá nhiều giá trị, bạn có thể điều chỉnh để chỉ lấy URL cần thiết
+                url = result  # hoặc unpack đúng số lượng giá trị như url, title = result
+                tasks.append(fetch_content(session, url))
             contents = await asyncio.gather(*tasks)
             content = ' '.join(contents)
         
         time.sleep(random.uniform(2, 5))
-        
-        return content, sources
-    except ReadTimeout:
-        logging.warning("Google gặp lỗi thời gian chờ. Chuyển sang tìm kiếm trên Bing...")
-        return await search_bing(query)
-    except ConnectTimeout:
-        logging.warning("Google gặp lỗi kết nối. Chuyển sang tìm kiếm trên Bing...")
+        return content
+
+    except (ReadTimeout, ConnectionError) as e:
+        logging.warning(f"Google gặp lỗi kết nối hoặc thời gian chờ: {str(e)}. Chuyển sang tìm kiếm trên Bing...")
         return await search_bing(query)
     except HTTPError as e:
         if e.response.status_code == 429:
             logging.warning("Google trả về lỗi 429. Chuyển sang Bing...")
             return await search_bing(query)
-        elif e.response.status_code == 500:
-            logging.warning("Google trả về lỗi 500. Chuyển sang Bing...")
-            return await search_bing(query)
         logging.error(f"Lỗi HTTP không mong muốn: {e}")
-        return "", ""
+        return ""
 
 async def search_bing(query):
     try:
-        logging.info(f"Tìm kiếm trên Bing: {WHITE}{query}{RESET}")
+        logging.info(f"Tìm kiếm trên Bing: {query}")
         bing_url = f"https://www.bing.com/search?q={query}"
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             bing_response = await fetch_content(session, bing_url)
             if bing_response:
                 return bing_response
@@ -336,9 +340,14 @@ def index():
 
             overall_similarity = 0
             similarities = []
+            sources = []
             for i, chunk in enumerate(chunks):
                 # Tìm kiếm trên Google và trích xuất nội dung
-                search_content = asyncio.run(search_google_async(chunk))
+                try:
+                    search_content, search_sources = asyncio.run(search_google_async(chunk))
+                except ValueError as e:
+                    logging.error(f"Error unpacking search results: {e}")
+                    search_content, search_sources = "", []
 
                 # Kiểm tra nếu search_content rỗng
                 if not search_content.strip():
@@ -346,23 +355,30 @@ def index():
                     # Nếu không tìm thấy nội dung, chia nhỏ đoạn văn bản
                     smaller_chunks = split_text_into_chunks(chunk, max_length=250)
                     for smaller_chunk in smaller_chunks:
-                        search_content = asyncio.run(search_google_async(smaller_chunk))
+                        try:
+                            search_content, search_sources = asyncio.run(search_google_async(smaller_chunk))
+                        except ValueError as e:
+                            logging.error(f"Error unpacking search results: {e}")
+                            search_content, search_sources = "", []
+                        
                         similarity = calculate_similarity(smaller_chunk, search_content)
                         overall_similarity += similarity
                         similarities.append(similarity)
+                        sources.extend(search_sources)
                     continue
 
                 # Kiểm tra nội dung trùng lặp giữa đoạn văn bản và kết quả tìm kiếm
                 similarity = calculate_similarity(chunk, search_content)
                 overall_similarity += similarity
                 similarities.append(similarity)
+                sources.extend(search_sources)
                 
                 # Log thông tin tiến trình
                 percentage_completed = ((i + 1) / len(chunks)) * 100
                 logging.info(f'Đoạn {i + 1}/{len(chunks)}: Mức độ giống nhau: {similarity * 100:.2f}%, Hoàn thành: {percentage_completed:.2f}%')
 
             # Đánh dấu các đoạn văn bị nghi ngờ đạo văn
-            marked_content = mark_plagiarism_chunks(chunks, similarities)
+            marked_content = mark_plagiarism_chunks(chunks, similarities, sources)
 
             # Lưu file đã được đánh dấu với thời gian hiện tại
             current_time = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
@@ -370,7 +386,7 @@ def index():
             os.makedirs(save_dir, exist_ok=True)
 
             if file.filename.endswith('.docx'):
-                marked_doc = mark_plagiarism_in_docx(doc, chunks, similarities)
+                marked_doc = mark_plagiarism_in_docx(doc, chunks, similarities, sources)
                 output_path = os.path.join(save_dir, f"checked_{current_time}.docx")
                 marked_doc.save(output_path)
             elif file.filename.endswith('.pdf'):
@@ -391,14 +407,10 @@ def index():
             flash(f'Mức độ giống nhau trung bình giữa tệp và nội dung tìm thấy trên Google: {average_similarity:.2f}%')
             logging.info(f'Tổng số đoạn: {len(chunks)}, Mức độ giống nhau trung bình: {average_similarity:.2f}%')
 
-            # Ghi kết quả vào tệp văn bản
-            text_output_path = os.path.join(save_dir, f"marked_{current_time}.txt")
-            with open(text_output_path, 'w', encoding='utf-8') as f:
-                f.write(marked_content)
-
             return render_template('result.html', similarity=average_similarity)
 
     return render_template('index.html')
+
 
 # Hàm kiểm tra định dạng file được phép
 def allowed_file(filename):
