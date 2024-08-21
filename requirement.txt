@@ -1,0 +1,9 @@
+PyPDF2
+googlesearch-python
+requests
+beautifulsoup4
+python-docx
+scikit-learn
+aiohttp
+colorlog
+reportlab

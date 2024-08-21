@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kiểm tra đạo văn</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body>
+    <div class="container mt-5">
+        <h1 class="text-center mb-4">Kiểm tra đạo văn</h1>
+        <form action="/" method="post" enctype="multipart/form-data" class="border p-4 rounded shadow-sm">
+            <div class="form-group">
+                <label for="file">Chọn tệp DOCX hoặc PDF:</label>
+                <input type="file" name="file" id="file" class="form-control-file" required>
+            </div>
+            <div class="form-group">
+                <label for="url">URL của trang web:</label>
+                <input type="text" name="url" id="url" class="form-control" placeholder="https://example.com">
+            </div>
+            <div class="form-group">
+                <label for="comment">Nhập bình luận:</label>
+                <textarea name="comment" id="comment" rows="4" class="form-control" placeholder="Nhập bình luận của bạn ở đây..."></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">Kiểm tra đạo văn</button>
+        </form>
+
+        {% with messages = get_flashed_messages() %}
+        {% if messages %}
+        <div class="alert alert-info mt-4">
+            <ul class="mb-0">
+                {% for message in messages %}
+                <li>{{ message }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        {% endwith %}
+    </div>
+
+    <!-- Bootstrap JS and dependencies -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.2/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+
+</html>
