@@ -5,7 +5,7 @@ import docx
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from PyPDF2 import PdfWriter, PdfReader
-import requests
+from requests.exceptions import ConnectionError, ReadTimeout, ConnectTimeout, HTTPError
 from googlesearch import search
 import logging
 import asyncio
@@ -110,14 +110,14 @@ def split_text_into_chunks(text, max_length=500):
     return chunks
 
 # Hàm đánh dấu các đoạn văn bị nghi ngờ đạo văn
-def mark_plagiarism_chunks(chunks, similarities, threshold=0.8):
+def mark_plagiarism_chunks(chunks, similarities, sources, threshold=0.8):
     logging.info("Đang đánh dấu các đoạn bị nghi ngờ đạo văn.")
     marked_chunks = []
 
-    for i, (chunk, similarity) in enumerate(zip(chunks, similarities)):
+    for i, (chunk, similarity, source) in enumerate(zip(chunks, similarities, sources)):
         if similarity >= threshold:
             reason = f"Đoạn {i + 1} bị đánh dấu đạo văn với mức độ giống nhau {similarity * 100:.2f}%."
-            marked_chunk = f"// Đạo văn: {reason}\n{chunk}\n// Lý do: Đoạn văn này có mức độ giống nhau vượt quá ngưỡng cho phép.\n\n"
+            marked_chunk = f"// Đạo văn: {reason}\n{chunk}\n// Lý do: Đoạn văn này có mức độ giống nhau vượt quá ngưỡng cho phép.\n// Nguồn: {source}\n\n"
             marked_chunks.append(marked_chunk)
             logging.warning(reason)
         else:
@@ -163,37 +163,43 @@ def is_valid_search_query(query):
         return False
     return True
 
+# Cập nhật hàm search_google_async để trả về cả nguồn và nội dung
 async def search_google_async(query):
     if not is_valid_search_query(query):
         logging.warning("Query không hợp lệ, bỏ qua tìm kiếm trên Google.")
-        return ""
+        return "", ""
 
     try:
         logging.info(f"Tìm kiếm trên Google: {query}")
-        search_results = search(query, num_results=3)
+        search_results = search(query, num_results=5)
         content = ""
+        sources = []
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             tasks = []
             for result in search_results:
                 tasks.append(fetch_content(session, result))
+                sources.append(result)
             contents = await asyncio.gather(*tasks)
             content = ' '.join(contents)
         
         time.sleep(random.uniform(2, 5))
         
-        return content
-    except requests.exceptions.ReadTimeout:
+        return content, sources
+    except ReadTimeout:
         logging.warning("Google gặp lỗi thời gian chờ. Chuyển sang tìm kiếm trên Bing...")
         return await search_bing(query)
-    except requests.exceptions.ConnectTimeout:
+    except ConnectTimeout:
         logging.warning("Google gặp lỗi kết nối. Chuyển sang tìm kiếm trên Bing...")
         return await search_bing(query)
-    except requests.exceptions.HTTPError as e:
+    except HTTPError as e:
         if e.response.status_code == 429:
             logging.warning("Google trả về lỗi 429. Chuyển sang Bing...")
             return await search_bing(query)
+        elif e.response.status_code == 500:
+            logging.warning("Google trả về lỗi 500. Chuyển sang Bing...")
+            return await search_bing(query)
         logging.error(f"Lỗi HTTP không mong muốn: {e}")
-        return ""
+        return "", ""
 
 async def search_bing(query):
     try:
@@ -286,13 +292,15 @@ def mark_plagiarism_in_pdf(file_path, chunks, similarities, output_path):
     with open(output_path, "wb") as output_pdf:
         writer.write(output_pdf)
 
-# Hàm đánh dấu các đoạn văn bị nghi ngờ đạo văn trong file DOCX
-def mark_plagiarism_in_docx(doc, chunks, similarities):
+# Hàm đánh dấu các đoạn văn bị nghi ngờ đạo văn trong file DOCX với highlight
+def mark_plagiarism_in_docx(doc, chunks, similarities, sources):
     threshold = 0.8
     for para in doc.paragraphs:
-        for i, (chunk, similarity) in enumerate(zip(chunks, similarities)):
+        for i, (chunk, similarity, source) in enumerate(zip(chunks, similarities, sources)):
             if similarity >= threshold and chunk in para.text:
-                para.text = para.text.replace(chunk, f"[Đạo văn] {chunk}")
+                run = para.add_run(f"[Đạo văn] {chunk}")
+                run.font.highlight_color = docx.shared.WD_COLOR_INDEX.YELLOW
+                para.add_run(f" (Nguồn: {source})")
     return doc
 
 # Route chính để tải lên file, tìm kiếm trên Google và kiểm tra đạo văn
