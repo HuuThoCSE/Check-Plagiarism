@@ -24,9 +24,12 @@ import socket
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
 
-# Mã ANSI cho màu trắng
+# Định nghĩa các mã màu ANSI
 WHITE = '\033[37m'
-RESET = '\033[0m'
+GREEN = '\033[92m'  # Màu xanh lá cây
+YELLOW = '\033[93m'  # Màu vàng
+RED = '\033[91m'  # Màu đỏ
+RESET = '\033[0m'  # Reset về màu mặc định
 
 # Thiết lập logging với colorlog
 formatter = ColoredFormatter(
@@ -34,7 +37,7 @@ formatter = ColoredFormatter(
     datefmt='%Y-%m-%d %H:%M:%S',
     log_colors={
         'DEBUG': 'cyan',
-        'INFO': 'green',
+        'INFO': 'white',
         'WARNING': 'yellow',
         'ERROR': 'red',
         'CRITICAL': 'bold_red',
@@ -180,7 +183,7 @@ async def search_google_async(query):
         return ""
 
     try:
-        logging.info(f"Tìm kiếm trên Google: {query}")
+        logging.info(f"Tìm kiếm trên Google: {GREEN}{query}{RESET}")
         search_results = search(query, num_results=3)
         content = ""
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
@@ -207,35 +210,37 @@ async def search_google_async(query):
 
 async def search_bing(query):
     try:
-        logging.info(f"Tìm kiếm trên Bing: {query}")
+        logging.info(f"Tìm kiếm trên Bing: {GREEN}{query}{RESET}")
         bing_url = f"https://www.bing.com/search?q={query}"
+        sources = [bing_url]  # Lưu trữ nguồn từ Bing
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             bing_response = await fetch_content(session, bing_url)
             if bing_response:
-                return bing_response
+                return bing_response, sources
         logging.warning("Không tìm thấy nội dung phù hợp từ Bing. Chuyển sang Cốc Cốc...")
         return await search_coccoc(query)
     except Exception as e:
         logging.error(f"Lỗi khi tìm kiếm trên Bing: {e}")
-        return await search_coccoc(query)
+        return "", []
 
 async def search_coccoc(query):
     try:
-        logging.info(f"Tìm kiếm trên Cốc Cốc: {WHITE}{query}{RESET}")
+        logging.info(f"Tìm kiếm trên Cốc Cốc: {GREEN}{query}{RESET}")
         coccoc_url = f"https://coccoc.com/search?query={query}"
-        async with aiohttp.ClientSession() as session:
+        sources = [coccoc_url]  # Lưu trữ nguồn từ Cốc Cốc
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             coccoc_response = await fetch_content(session, coccoc_url)
             if coccoc_response:
-                return coccoc_response
+                return coccoc_response, sources
         logging.warning("Không tìm thấy nội dung phù hợp từ Cốc Cốc. Chuyển sang Yahoo...")
         return await search_yahoo(query)
     except Exception as e:
         logging.error(f"Lỗi khi tìm kiếm trên Cốc Cốc: {e}")
-        return await search_yahoo(query)
+        return "", []
 
 async def search_yahoo(query):
     try:
-        logging.info(f"Tìm kiếm trên Yahoo: {WHITE}{query}{RESET}")
+        logging.info(f"Tìm kiếm trên Yahoo: {GREEN}{query}{RESET}")
         yahoo_url = f"https://search.yahoo.com/search?p={query}"
         async with aiohttp.ClientSession() as session:
             yahoo_response = await fetch_content(session, yahoo_url)
@@ -307,6 +312,15 @@ def mark_plagiarism_in_docx(doc, chunks, similarities, sources):
                 para.add_run(f" (Nguồn: {source})")
     return doc
 
+# Hàm để chọn màu dựa trên mức độ tương đồng
+def get_similarity_color(similarity):
+    if similarity < 0.4:
+        return GREEN
+    elif 0.4 <= similarity < 0.7:
+        return YELLOW
+    else:
+        return RED
+
 # Route chính để tải lên file, tìm kiếm trên Google và kiểm tra đạo văn
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -342,6 +356,7 @@ def index():
             similarities = []
             sources = []
             for i, chunk in enumerate(chunks):
+                print("\n")
                 # Tìm kiếm trên Google và trích xuất nội dung
                 try:
                     search_content, search_sources = asyncio.run(search_google_async(chunk))
@@ -349,10 +364,8 @@ def index():
                     logging.error(f"Error unpacking search results: {e}")
                     search_content, search_sources = "", []
 
-                # Kiểm tra nếu search_content rỗng
                 if not search_content.strip():
                     logging.warning(f"Không tìm thấy nội dung phù hợp cho đoạn {i+1}.")
-                    # Nếu không tìm thấy nội dung, chia nhỏ đoạn văn bản
                     smaller_chunks = split_text_into_chunks(chunk, max_length=250)
                     for smaller_chunk in smaller_chunks:
                         try:
@@ -375,7 +388,13 @@ def index():
                 
                 # Log thông tin tiến trình
                 percentage_completed = ((i + 1) / len(chunks)) * 100
-                logging.info(f'Đoạn {i + 1}/{len(chunks)}: Mức độ giống nhau: {similarity * 100:.2f}%, Hoàn thành: {percentage_completed:.2f}%')
+
+                # Bên trong vòng lặp, khi bạn tính toán độ tương đồng
+                color = get_similarity_color(similarity)
+                colored_similarity = f"{color}{similarity * 100:.2f}%{RESET}"
+
+                # Sử dụng màu đã định nghĩa trong log
+                logging.info(f'Đoạn {i + 1}/{len(chunks)}: Mức độ giống nhau: {colored_similarity}, Hoàn thành: {percentage_completed:.2f}%')
 
             # Đánh dấu các đoạn văn bị nghi ngờ đạo văn
             marked_content = mark_plagiarism_chunks(chunks, similarities, sources)
