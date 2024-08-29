@@ -286,7 +286,7 @@ def add_mark_to_page(page, chunk, similarity):
 def mark_plagiarism_in_pdf(file_path, chunks, similarities, output_path):
     reader = PdfReader(file_path)
     writer = PdfWriter()
-    threshold = 0.8
+    threshold = 0.5
 
     for i, page in enumerate(reader.pages):
         text = page.extract_text()
@@ -303,7 +303,7 @@ def mark_plagiarism_in_pdf(file_path, chunks, similarities, output_path):
 
 # Hàm đánh dấu các đoạn văn bị nghi ngờ đạo văn trong file DOCX với highlight
 def mark_plagiarism_in_docx(doc, chunks, similarities, sources):
-    threshold = 0.8
+    threshold = 0.5
     for para in doc.paragraphs:
         for i, (chunk, similarity, source) in enumerate(zip(chunks, similarities, sources)):
             if similarity >= threshold and chunk in para.text:
